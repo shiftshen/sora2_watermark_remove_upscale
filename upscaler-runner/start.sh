@@ -22,7 +22,8 @@ echo "[upscaler-runner] using config: $CONFIG_PATH"
 
 # 后台启动并记录 PID 与日志
 cd "$SCRIPT_DIR"
-nohup env RUNNER_CONFIG="$CONFIG_PATH" node index.js > "$LOG_FILE" 2>&1 &
+rm -f "$LOG_FILE" 2>/dev/null || true
+nohup env RUNNER_CONFIG="$CONFIG_PATH" RUN_ONCE=true node index.js > "$LOG_FILE" 2>&1 &
 PID=$!
 echo "$PID" > "$PID_FILE"
 sleep 1
@@ -34,3 +35,5 @@ else
   echo "[upscaler-runner] failed to start"
   exit 1
 fi
+
+echo "[upscaler-runner] stop hint: use ./stop.sh to terminate immediately"

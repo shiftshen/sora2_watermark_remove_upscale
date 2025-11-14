@@ -5,13 +5,10 @@
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
-    "stop": "pkill -f 'node .*upscaler-runner/index.js' || true",
-    "control": "node control.js"
+    "stop": "pkill -f 'node .*upscaler-runner/index.js' || true"
   },
   "dependencies": {
     "axios": "^1.6.2",
-    "chokidar": "^3.5.3",
-    "express": "^4.19.2",
-    "cors": "^2.8.5"
+    "chokidar": "^3.5.3"
   }
 }

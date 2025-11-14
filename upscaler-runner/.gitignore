@@ -1,0 +1,8 @@
+node_modules/
+.DS_Store
+upscaler-runner.out
+upscaler-runner.pid
+faild/
+.trae/
+*.log
+*.tmp
