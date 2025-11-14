@@ -1,0 +1,9 @@
+node_modules/
+.git/
+.DS_Store
+logs/
+data/
+Output/
+Failed/
+*.log
+*.sqlite

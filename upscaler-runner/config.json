@@ -1,0 +1,14 @@
+{
+  "OUTPUT_DIR": "/home/data/water_mark_remove/Output",
+  "UPSCALER_OUTPUT_DIR": "/home/data/water_mark_remove/outputupscaler",
+  "FAIL_UPSCALER_DIR": "/home/data/water_mark_remove/Faildupscaler",
+  "COMFY_BASE_URL": "http://192.168.1.200:28188",
+  "COMFY_INPUT_DIR": "/data/comfyui/input",
+  "COMFY_OUTPUT_DIR": "/data/comfyui/output",
+  "WORKFLOW_PATH": "/home/data/water_mark_remove/upscaler-runner/workflows/videouper.json",
+  "BATCH_SIZE": 5,
+  "MIN_READY_SIZE": 1048576,
+  "POLL_TIMEOUT_MS": 900000,
+  "POLL_INTERVAL_MS": 5000,
+  "DELETE_SOURCE_ON_SUCCESS": true
+}

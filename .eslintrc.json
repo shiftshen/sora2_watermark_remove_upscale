@@ -1,0 +1,28 @@
+{
+  "root": true,
+  "env": {
+    "es2021": true,
+    "node": true,
+    "browser": true
+  },
+  "parserOptions": {
+    "ecmaVersion": 2022,
+    "sourceType": "module"
+  },
+  "ignorePatterns": [
+    "node_modules/",
+    "logs/",
+    "data/",
+    "Input/",
+    "Output/"
+  ],
+  "extends": ["eslint:recommended"],
+  "rules": {
+    "no-unused-vars": ["warn", { "args": "none", "vars": "all" }],
+    "no-undef": "error",
+    "no-console": "off",
+    "no-prototype-builtins": "off",
+    "no-useless-escape": "off",
+    "no-empty": "off"
+  }
+}

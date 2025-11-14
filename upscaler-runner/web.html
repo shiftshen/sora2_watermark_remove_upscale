@@ -1,0 +1,84 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Upscaler 控制台</title>
+  <style>
+    body{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica Neue,Arial,sans-serif;background:#f5f5f5;margin:0}
+    .container{max-width:1000px;margin:20px auto;padding:20px}
+    .card{background:#fff;border-radius:10px;box-shadow:0 2px 6px rgba(0,0,0,.08);padding:20px;margin-bottom:20px}
+    .btn{padding:10px 16px;border:none;border-radius:6px;color:#fff;margin-right:10px;cursor:pointer}
+    .btn-success{background:#27ae60}.btn-danger{background:#e74c3c}.btn-primary{background:#3498db}.btn-warning{background:#f39c12}
+    table{width:100%;border-collapse:collapse}
+    th,td{padding:10px;border-bottom:1px solid #eee;text-align:left}
+    h1{margin:0 0 10px}
+    .status{padding:8px 12px;border-radius:20px;display:inline-block}
+    .running{background:#d5f4e6;color:#27ae60}.stopped{background:#fadbd8;color:#e74c3c}
+    .logs{white-space:pre-wrap;font-family:ui-monospace,Menlo,Consolas,monospace;background:#fafafa;border:1px solid #eee;border-radius:8px;padding:10px;height:160px;overflow:auto}
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="card">
+      <h1>🎬 Upscaler 控制台</h1>
+      <div id="status" class="status">加载中...</div>
+      <div style="margin-top:12px">
+        <button class="btn btn-success" onclick="start(true)">开启并删除源</button>
+        <button class="btn btn-primary" onclick="start(false)">开启并保留源</button>
+        <button class="btn btn-danger" onclick="stop()">停止</button>
+        <button class="btn btn-warning" onclick="processExisting()">处理现有 Output</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>任务摘要</h2>
+      <div id="summaryCounts" style="margin-bottom:10px"></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
+        <div>
+          <h3>待处理</h3>
+          <ul id="listPending"></ul>
+        </div>
+        <div>
+          <h3>处理中</h3>
+          <ul id="listProcessing"></ul>
+        </div>
+        <div>
+          <h3>已完成</h3>
+          <ul id="listCompleted"></ul>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>日志</h2>
+      <div id="logs" class="logs"></div>
+    </div>
+  </div>
+
+  <script>
+    async function refresh(){
+      const s=await fetch('/upscaler/api/ups/status').then(r=>r.json()).catch(()=>({success:false}))
+      const el=document.getElementById('status')
+      if(s.success){
+        el.className='status '+(s.data.running?'running':'stopped')
+        el.textContent=(s.data.running?'运行中':'已停止')+' | 日志: '+s.data.logFile
+      }else{
+        el.className='status stopped';el.textContent='接口不可用'
+      }
+      const sum=await fetch('/upscaler/api/ups/summary').then(r=>r.json()).catch(()=>({success:false}))
+      if(sum.success){
+        document.getElementById('summaryCounts').textContent=`Output: ${sum.data.counts.output} | 待处理: ${sum.data.counts.pending} | 处理中: ${sum.data.counts.processing} | 已完成: ${sum.data.counts.completed}`
+        const lp=document.getElementById('listPending');lp.innerHTML=sum.data.lists.pending.map(n=>`<li>${n}</li>`).join('')
+        const lpr=document.getElementById('listProcessing');lpr.innerHTML=sum.data.lists.processing.map(n=>`<li>${n}</li>`).join('')
+        const lc=document.getElementById('listCompleted');lc.innerHTML=sum.data.lists.completed.map(n=>`<li>${n}</li>`).join('')
+      }
+      const lg=await fetch('/upscaler/api/ups/logs').then(r=>r.json()).catch(()=>({success:false}))
+      document.getElementById('logs').textContent=lg.success?lg.data.tail:'(无日志)'
+    }
+    async function start(del){await fetch('/upscaler/api/ups/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({deleteSourceOnSuccess:del})});setTimeout(refresh,1200)}
+    async function stop(){await fetch('/upscaler/api/ups/stop',{method:'POST'});setTimeout(refresh,800)}
+    async function processExisting(){const r=await fetch('/upscaler/api/ups/process-existing',{method:'POST'}).then(r=>r.json());alert('已提交 '+(r.data?.submitted||0)+' 个视频');}
+    refresh();setInterval(refresh,5000)
+  </script>
+</body>
+</html>

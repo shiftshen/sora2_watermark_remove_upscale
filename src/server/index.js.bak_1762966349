@@ -1,0 +1,688 @@
+import express from 'express';
+import cors from 'cors';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import compression from 'compression';
+import { readdirSync, statSync, mkdirSync, copyFileSync } from 'fs';
+import dotenv from 'dotenv';
+import SoraApiClient from './sora-api-client.js';
+import mime from 'mime-types';
+
+// 提前加载环境变量，确保下方使用 process.env 时已生效
+dotenv.config();
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+const app = express();
+
+// Directories (allow absolute override via env)
+// 支持 INPUT_DIR/OUTPUT_DIR 优先，其次兼容 SORA_INPUT_DIR/SORA_OUTPUT_DIR，最后回退到项目根目录下的默认文件夹
+const INPUT_DIR =
+  process.env.INPUT_DIR
+    ? path.resolve(process.env.INPUT_DIR)
+    : process.env.SORA_INPUT_DIR
+      ? path.resolve(process.env.SORA_INPUT_DIR)
+      : path.join(process.cwd(), 'Input');
+
+const OUTPUT_DIR =
+  process.env.OUTPUT_DIR
+    ? path.resolve(process.env.OUTPUT_DIR)
+    : process.env.SORA_OUTPUT_DIR
+      ? path.resolve(process.env.SORA_OUTPUT_DIR)
+      : path.join(process.cwd(), 'Output');
+
+// 顶层 Failed 目录（与 Input/Output 同级）
+const FAILED_DIR =
+  process.env.FAILED_DIR
+    ? path.resolve(process.env.FAILED_DIR)
+    : path.join(process.cwd(), 'Failed');
+
+// Global in-memory state to satisfy frontend expectations
+const state = {
+  batch: { isProcessing: false, pending: 0, processing: 0, uptimeStart: null },
+  totals: { total: 0, completed: 0, failed: 0, pending: 0 },
+  files: []
+};
+
+// Middleware
+app.use(cors({ origin: ['http://localhost:3000', 'http://localhost:5173'], credentials: true }));
+app.use(express.json({ limit: '2mb' }));
+app.use(express.urlencoded({ extended: true, limit: '2mb' }));
+app.use(compression());
+
+// Static
+app.use('/static', express.static(path.join(__dirname, '../web')));
+
+// Serve favicon to avoid 404
+app.get('/favicon.ico', (req, res) => {
+  res.type('image/x-icon');
+  // 1px empty icon
+  const emptyIco = Buffer.from(
+    '0000010001001010000001000000010000000000680000001600000028000000100000002000000001002000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000',
+    'hex'
+  );
+  res.send(emptyIco);
+});
+
+// Helpers
+const getBatchUptime = () => {
+  if (!state.batch.isProcessing || !state.batch.uptimeStart) return 0;
+  return Date.now() - state.batch.uptimeStart;
+};
+
+function listFilesRecursive(dir) {
+  const files = [];
+  try {
+    const entries = readdirSync(dir, { withFileTypes: true });
+    for (const entry of entries) {
+      const full = path.join(dir, entry.name);
+      if (entry.name.startsWith('.') || entry.name.startsWith('._')) {
+        continue;
+      }
+      if (entry.isFile()) {
+        files.push(full);
+      } else if (entry.isDirectory()) {
+        files.push(...listFilesRecursive(full));
+      }
+    }
+  } catch {}
+  return files;
+}
+
+function normalizeBaseName(name) {
+  // 把输出常见后缀视为同名：_clean/_out/_processed/_result
+  return name.replace(/_(clean|out|processed|result)$/i, '');
+}
+
+function getFolderStats() {
+  const inputAll = listFilesRecursive(INPUT_DIR).filter(isVideoFile).filter(p => {
+    try { return statSync(p).size > 0 } catch { return false }
+  });
+  const inputFiles = inputAll
+    .filter(f => {
+      const rel = path.relative(INPUT_DIR, f);
+      return !rel.split(path.sep)[0].toLowerCase().startsWith('failed');
+    })
+    .map(p => path.basename(p));
+  const OUTPUT_DIR_LOWER = path.join(path.dirname(OUTPUT_DIR), 'output');
+  const outputListUpper = listFilesRecursive(OUTPUT_DIR).filter(isVideoFile).filter(p => {
+    try { return statSync(p).size > 0 } catch { return false }
+  });
+  const outputListLower = listFilesRecursive(OUTPUT_DIR_LOWER).filter(isVideoFile).filter(p => {
+    try { return statSync(p).size > 0 } catch { return false }
+  });
+  const outputFiles = [...outputListUpper, ...outputListLower].map(p => path.basename(p));
+  const outputBase = new Set(outputFiles.map(f => normalizeBaseName(path.parse(f).name)));
+  const unprocessedCount = inputFiles.filter(f => !outputBase.has(path.parse(f).name)).length;
+  const failedList = listFilesRecursive(FAILED_DIR).filter(isVideoFile).filter(p => {
+    try { return statSync(p).size > 0 } catch { return false }
+  });
+  const failedCount = failedList.length;
+
+  return { inputCount: inputFiles.length, outputCount: outputFiles.length, unprocessedCount, failedCount };
+}
+
+// Routes
+app.get('/api/stats', (req, res) => {
+  const folderStats = getFolderStats();
+  const totals = {
+    completed: folderStats.outputCount || 0,
+    failed: folderStats.failedCount || 0,
+    pending: folderStats.unprocessedCount || 0,
+    total: (folderStats.outputCount || 0) + (folderStats.failedCount || 0) + (folderStats.unprocessedCount || 0)
+  };
+  res.json({ success: true, data: { total: totals, folderStats } });
+});
+app.get('/api/health', async (req, res) => {
+  try {
+    const hc = await soraClient.healthCheck({ timeout: 8000 });
+    const ok = hc.success && hc.status && hc.status !== 522;
+    res.json({
+      success: true,
+      data: {
+        status: ok ? 'healthy' : 'degraded',
+        timestamp: new Date().toISOString(),
+        uptime: process.uptime(),
+        api: {
+          baseURL: soraClient.baseURL,
+          reachable: ok,
+          status: hc.status || null,
+          latencyMs: hc.latencyMs || null,
+          endpoint: hc.endpoint || null,
+          error: hc.error || null
+        }
+      }
+    });
+  } catch (e) {
+    res.json({ success: true, data: { status: 'degraded', timestamp: new Date().toISOString(), uptime: process.uptime(), api: { baseURL: soraClient.baseURL, reachable: false, error: e.message } } });
+  }
+});
+
+app.get('/api/status', (req, res) => {
+  res.json({
+    success: true,
+    data: {
+      running: true,
+      uptime: process.uptime() * 1000,
+      batchStats: { ...state.batch, uptime: getBatchUptime() },
+      config: {
+        inputDir: INPUT_DIR,
+        outputDir: OUTPUT_DIR,
+        batchSize: 10,
+        maxConcurrent: 2,
+      }
+    }
+  });
+});
+
+// Merged into top-level /api/stats to include folderStats
+
+app.get('/api/batch/stats', (req, res) => {
+  updateBatchCounters();
+  res.json({ success: true, data: { pending: state.batch.pending, processing: state.batch.processing, uptime: getBatchUptime(), isProcessing: state.batch.isProcessing, queueLen: state.files.length } });
+});
+
+app.get('/api/debug/input-files', (req, res) => {
+  // 排除 Input/Failed 目录，保持 Input 干净的统计口径
+  const files = listFilesRecursive(INPUT_DIR)
+    .filter(isVideoFile)
+    .filter(p => { try { return statSync(p).size > 0 } catch { return false } })
+    .filter(f => {
+      const rel = path.relative(INPUT_DIR, f);
+      return !rel.split(path.sep)[0].toLowerCase().startsWith('failed');
+    });
+  res.json({ success: true, data: { count: files.length, files } });
+});
+
+// 列出 Output 目录中的视频文件，便于 HTTP 诊断而无需 SSH
+app.get('/api/debug/output-files', (req, res) => {
+  const lower = path.join(path.dirname(OUTPUT_DIR), 'output');
+  const filesUpper = listFilesRecursive(OUTPUT_DIR).filter(isVideoFile).filter(p => { try { return statSync(p).size > 0 } catch { return false } });
+  const filesLower = listFilesRecursive(lower).filter(isVideoFile).filter(p => { try { return statSync(p).size > 0 } catch { return false } });
+  const files = [...filesUpper, ...filesLower];
+  res.json({ success: true, data: { count: files.length, files } });
+});
+
+app.get('/api/files', (req, res) => {
+  const limit = Number(req.query.limit || 50);
+  const files = state.files.slice(0, limit);
+  res.json({ success: true, data: files, pagination: { limit, offset: 0, total: state.files.length } });
+});
+
+app.post('/api/batch/start', (req, res) => {
+  const seedFiles = scanInputVideoFiles();
+  console.log('[batch] /api/batch/start seed candidates:', seedFiles.length);
+  seedQueueFromInput();
+  if (!state.batch.isProcessing) {
+    state.batch.isProcessing = true;
+    state.batch.uptimeStart = Date.now();
+    startRunner();
+  }
+  updateBatchCounters();
+  res.json({ success: true, data: { message: '批处理已启动', pending: state.batch.pending, queued: state.files.length, seedCount: seedFiles.length } });
+});
+
+app.post('/api/batch/stop', (req, res) => {
+  state.batch.isProcessing = false;
+  if (runner.timer) {
+    clearInterval(runner.timer);
+    runner.timer = null;
+  }
+  updateBatchCounters();
+  res.json({ success: true, data: { message: '批处理已停止' } });
+});
+
+app.get('/api/batch/stats', (req, res) => {
+  updateBatchCounters();
+  res.json({ success: true, data: { pending: state.batch.pending, processing: state.batch.processing, uptime: getBatchUptime(), isProcessing: state.batch.isProcessing, queueLen: state.files.length } });
+});
+
+app.delete('/api/batch/completed', (req, res) => {
+  const removedCompleted = state.files.filter(f => f.status === 'completed').length;
+  const removedFailed = state.files.filter(f => f.status === 'failed').length;
+  state.files = state.files.filter(f => f.status !== 'completed' && f.status !== 'failed');
+  state.totals.completed = 0;
+  state.totals.failed = 0;
+  state.totals.total = state.files.length;
+  res.json({ success: true, data: { completed: removedCompleted, failed: removedFailed } });
+});
+
+// 安全清理：删除 Input 中已有对应 Output 的源文件（使用 safeDeleteInputFile）
+app.delete('/api/system/cleanup', async (req, res) => {
+  try {
+    const inputFiles = listFilesRecursive(INPUT_DIR).filter(isVideoFile);
+    const outputFiles = listFilesRecursive(OUTPUT_DIR).filter(isVideoFile);
+
+    // 依据输出文件名的基名做匹配（_clean/_out/_processed/_result 归一化）
+    const outputBase = new Set(outputFiles.map(f => normalizeBaseName(path.parse(path.basename(f)).name)));
+
+    let deleted = 0;
+    const deletedList = [];
+    const skipped = [];
+
+    for (const inFile of inputFiles) {
+      const base = path.parse(path.basename(inFile)).name;
+      if (outputBase.has(base)) {
+        const ok = await safeDeleteInputFile(inFile, 3);
+        if (ok) {
+          deleted++;
+          deletedList.push(inFile);
+        } else {
+          skipped.push({ file: inFile, reason: 'delete_failed' });
+        }
+      } else {
+        skipped.push({ file: inFile, reason: 'no_matching_output' });
+      }
+    }
+
+    // 与前端兼容：补充 deletedLogs 字段（此端点仅进行文件系统清理，不动日志）
+    res.json({ success: true, data: { deletedFiles: deleted, deletedList, skipped, deletedLogs: 0 } });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err?.message || 'cleanup_failed' });
+  }
+});
+
+// 额外：安全清理端点，将 Input 根目录中的视频移动到 Input/Failed
+// 手动兜底，确保任何情况下 Input 不残留已处理或失败文件
+app.post('/api/cleanup', async (req, res) => {
+  try {
+    // 统一将失败文件移动到顶层 Failed 目录
+    try { mkdirSync(FAILED_DIR, { recursive: true }); } catch {}
+
+    const entries = readdirSync(INPUT_DIR, { withFileTypes: true });
+    let moved = 0;
+    const results = [];
+    for (const entry of entries) {
+      if (!entry.isFile()) continue;
+      const full = path.join(INPUT_DIR, entry.name);
+      if (!isVideoFile(full)) continue;
+      // 若已在顶层 Failed 中，跳过
+      const relToFailed = path.relative(FAILED_DIR, full);
+      if (!relToFailed.startsWith('..')) {
+        results.push({ input: full, dest: full, moved: false, error: 'already_in_failed' });
+        continue;
+      }
+      const dest = path.join(FAILED_DIR, entry.name);
+      try {
+        try {
+          // 优先原子移动，同设备最快
+          copyFileSync(full, dest);
+          // 尝试删除源文件（兼容不同文件系统权限）
+          const deleted = await safeDeleteInputFile(full, 3);
+          if (!deleted) {
+            results.push({ input: full, dest, moved: false, error: 'delete_failed_after_copy' });
+            continue;
+          }
+        } catch (err) {
+          // 若 copy 或删除失败，尝试 rename（可能跨设备失败）
+          try {
+            const fs = await import('fs/promises');
+            await fs.rename(full, dest);
+          } catch (e) {
+            results.push({ input: full, dest, moved: false, error: e.message || String(e) });
+            continue;
+          }
+        }
+        moved++;
+        results.push({ input: full, dest, moved: true });
+      } catch (err) {
+        results.push({ input: full, dest, moved: false, error: err?.message || 'move_failed' });
+      }
+    }
+
+    res.json({ success: true, data: { moved, results } });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error?.message || 'cleanup_input_failed' });
+  }
+});
+
+// 兼容别名：/api/system/fs-cleanup 与 /api/system/cleanup 行为一致
+app.delete('/api/system/fs-cleanup', async (req, res) => {
+  try {
+    const inputFiles = listFilesRecursive(INPUT_DIR).filter(isVideoFile);
+    const outputFiles = listFilesRecursive(OUTPUT_DIR).filter(isVideoFile);
+
+    const outputBase = new Set(outputFiles.map(f => normalizeBaseName(path.parse(path.basename(f)).name)));
+
+    let deleted = 0;
+    const deletedList = [];
+    const skipped = [];
+
+    for (const inFile of inputFiles) {
+      const base = path.parse(path.basename(inFile)).name;
+      if (outputBase.has(base)) {
+        const ok = await safeDeleteInputFile(inFile, 3);
+        if (ok) {
+          deleted++;
+          deletedList.push(inFile);
+        } else {
+          skipped.push({ file: inFile, reason: 'delete_failed' });
+        }
+      } else {
+        skipped.push({ file: inFile, reason: 'no_matching_output' });
+      }
+    }
+
+    res.json({ success: true, data: { deletedFiles: deleted, deletedList, skipped, deletedLogs: 0 } });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err?.message || 'cleanup_failed' });
+  }
+});
+
+// 将当前已标记为失败的源文件移动到 Input/Failed（事后清理）
+app.post('/api/system/move-failed', async (req, res) => {
+  try {
+    const failed = state.files.filter(f => f.status === 'failed');
+    let moved = 0;
+    const errors = [];
+    for (const f of failed) {
+      try {
+        await moveFileToFailed(f.filePath);
+        f.movedToFailed = true;
+        moved++;
+      } catch (e) {
+        errors.push({ file: f.filePath, error: e?.message || String(e) });
+      }
+    }
+    res.json({ success: true, data: { moved, errors } });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err?.message || 'move_failed_cleanup_error' });
+  }
+});
+
+app.post('/api/system/restart', (req, res) => {
+  // Do not exit process in dev; just acknowledge.
+  res.json({ success: true, data: { message: '应用将在5秒后重启（模拟）' } });
+});
+
+app.get('/', (req, res) => {
+  res.sendFile(path.join(__dirname, '../web/index.html'));
+});
+
+// 404 JSON handler
+app.use((req, res) => {
+  res.status(404).json({ success: false, error: '接口不存在' });
+});
+
+// 默认端口改为 25348，并优先使用 SERVER_PORT（避免被 PORT 覆盖导致误用 3000）
+const port = Number(process.env.SERVER_PORT || process.env.PORT || 25348);
+const host = process.env.SERVER_HOST || '::';
+
+// Auto scan timer to seed queue and autostart
+const auto = { timer: null, intervalMs: 5000 };
+
+function startAutoScan() {
+  if (auto.timer) return;
+  auto.timer = setInterval(() => {
+    const seedFiles = scanInputVideoFiles();
+    if (seedFiles.length > 0 && !state.batch.isProcessing) {
+      console.log(`[auto-scan] 检测到 ${seedFiles.length} 个新文件，自动启动批处理`);
+      seedQueueFromInput();
+      state.batch.isProcessing = true;
+      state.batch.uptimeStart = Date.now();
+      startRunner();
+      updateBatchCounters();
+    }
+  }, auto.intervalMs);
+}
+
+const server = app.listen(port, host, () => {
+  const address = server.address();
+  const hostOut = address.address === '::' ? 'localhost' : address.address;
+  console.log(`Web server listening on http://${hostOut}:${address.port}`);
+  startAutoScan();
+});
+
+// Simple batch runner state
+const runner = { timer: null, concurrency: 1 };
+const VIDEO_EXTS = new Set(['.mp4', '.mov', '.avi', '.mkv', '.wmv', '.flv', '.webm']);
+// 单任务超时（默认10分钟），可用环境变量 JOB_TIMEOUT_MS 覆盖
+const JOB_TIMEOUT_MS = Number(process.env.JOB_TIMEOUT_MS || 10 * 60 * 1000);
+
+function isVideoFile(filePath) {
+  // 1) 扩展名鲁棒识别：去除尾部空白与常见引号符号
+  let ext = path.parse(filePath).ext.toLowerCase();
+  if (ext) {
+    ext = ext.replace(/[\s\u00A0]+$/g, ''); // 去除空格与不间断空格
+    ext = ext.replace(/["'’“”]+$/g, ''); // 去除可能拼接在末尾的引号
+    if (VIDEO_EXTS.has(ext)) return true;
+  }
+  // 2) 回退：使用 MIME 类型判断（例如文件名含特殊字符导致扩展名解析异常）
+  const mt = mime.lookup(filePath);
+  if (mt && String(mt).startsWith('video/')) return true;
+  return false;
+}
+
+function computeOutputPath(inputPath) {
+  const parsed = path.parse(inputPath);
+  return path.join(OUTPUT_DIR, `${parsed.name}_clean${parsed.ext}`);
+}
+
+function scanInputVideoFiles() {
+  const all = listFilesRecursive(INPUT_DIR);
+  return all
+    .filter(p => {
+      const rel = path.relative(INPUT_DIR, p);
+      const top = rel.split(path.sep)[0]?.toLowerCase();
+      return top !== 'failed';
+    })
+    .filter(isVideoFile);
+}
+
+function seedQueueFromInput() {
+  const files = scanInputVideoFiles();
+  console.log('[batch] scan input files:', files.length);
+  for (const f of files) {
+    const exists = state.files.find(x => x.filePath === f);
+    if (!exists) {
+      state.files.push({
+        filePath: f,
+        outputPath: computeOutputPath(f),
+        status: 'pending',
+        progress: 0,
+        createdAt: Date.now()
+      });
+    }
+  }
+  state.totals.total = state.files.length;
+}
+
+function updateBatchCounters() {
+  const pending = state.files.filter(f => f.status === 'pending').length;
+  const processing = state.files.filter(f => f.status === 'processing').length;
+  const completed = state.files.filter(f => f.status === 'completed').length;
+  const failed = state.files.filter(f => f.status === 'failed').length;
+  state.batch.pending = pending;
+  state.batch.processing = processing;
+  state.totals.completed = completed;
+  state.totals.failed = failed;
+}
+
+function maybeStopRunner() {
+  const pending = state.files.some(f => f.status === 'pending');
+  const processing = state.files.some(f => f.status === 'processing');
+  if (!pending && !processing) {
+    state.batch.isProcessing = false;
+    if (runner.timer) {
+      clearInterval(runner.timer);
+      runner.timer = null;
+    }
+  }
+}
+
+// 安全删除：带重试与权限修复，避免偶发 EPERM/EBUSY 导致未删除
+async function safeDeleteInputFile(filePath, attempts = 3) {
+  try {
+    const fsPromises = await import('fs/promises');
+
+    const exists = async () => {
+      try {
+        await fsPromises.access(filePath);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+
+    const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+    for (let i = 1; i <= attempts; i++) {
+      try {
+        await fsPromises.unlink(filePath);
+        if (!(await exists())) {
+          return true;
+        }
+      } catch (err) {
+        const code = err && err.code;
+        if (code === 'EPERM' || code === 'EACCES') {
+          try {
+            await fsPromises.chmod(filePath, 0o666);
+          } catch {}
+        }
+        await sleep(500);
+        continue;
+      }
+    }
+
+    return !(await exists());
+  } catch (e) {
+    return false;
+  }
+}
+
+function startRunner() {
+  if (runner.timer) return;
+  runner.timer = setInterval(async () => {
+    if (!state.batch.isProcessing) return;
+    // 超时守卫：超过阈值仍处于 processing 的任务标记为失败
+  for (const pf of state.files) {
+    if (pf.status === 'processing' && pf.startedAt && (Date.now() - pf.startedAt > JOB_TIMEOUT_MS) && pf.progress < 100) {
+      pf.status = 'failed';
+      pf.error = 'timeout_exceeded';
+      pf.progress = Math.min(pf.progress || 0, 99);
+      // 超时立即将源文件移至 Input/Failed，保持 Input 干净
+      try {
+        await moveFileToFailed(pf.filePath);
+        pf.movedToFailed = true;
+      } catch (e) {
+        pf.moveFailedError = e?.message || String(e);
+      }
+    }
+  }
+    updateBatchCounters();
+    maybeStopRunner();
+    // Start new tasks up to concurrency
+    const currentlyProcessing = state.files.filter(f => f.status === 'processing').length;
+    let slots = Math.max(0, runner.concurrency - currentlyProcessing);
+    for (const f of state.files) {
+      if (slots <= 0) break;
+      if (f.status === 'pending') {
+        // 移除密钥校验，公开端点无需密钥
+        f.status = 'processing';
+        f.progress = 0;
+        f.startedAt = Date.now();
+        slots--;
+        const size = statSync(f.filePath).size;
+        // 启动真实 API 处理
+        f._promise = soraClient.processVideo(f.filePath, {
+          fileSize: size,
+          onProgress: (p) => {
+            if (typeof p?.progress === 'number') {
+              f.progress = Math.min(99, p.progress);
+            }
+          }
+        })
+        .then(async (result) => {
+          // 若任务已因超时被标记失败，跳过后续完成逻辑
+          if (f.status === 'failed' && f.error === 'timeout_exceeded') {
+            return;
+          }
+          if (!result?.success) {
+            throw new Error(result?.error || 'API处理失败');
+          }
+          const url = result?.data?.download_url;
+          if (!url) {
+            throw new Error('API未返回下载地址');
+          }
+          await soraClient.downloadProcessedVideo(url, f.outputPath, {
+            onProgress: (p) => {
+              if (typeof p?.progress === 'number') {
+                f.progress = Math.max(f.progress, 90 + p.progress * 0.1);
+              }
+            }
+          });
+          // 下载完成后删除源文件，避免重复提交占用资源
+          const deleted = await safeDeleteInputFile(f.filePath, 3);
+          if (!deleted) {
+            // 忽略删除失败，但记录状态，便于在 /api/files 中查看
+            f.deleteError = 'delete_failed_after_retries';
+          }
+          f.status = 'completed';
+          f.progress = 100;
+        })
+        .catch(async (err) => {
+          f.status = 'failed';
+          f.error = err?.message || String(err);
+          // 失败任务移动到 Input/Failed 下的同名路径，保持 Input 干净
+          try {
+            await moveFileToFailed(f.filePath);
+            f.movedToFailed = true;
+          } catch (e) {
+            f.moveFailedError = e?.message || String(e);
+          }
+        })
+        .finally(() => {
+          updateBatchCounters();
+          maybeStopRunner();
+        });
+      }
+    }
+    // 进度由 API 回调驱动
+    updateBatchCounters();
+  }, 800);
+}
+
+// 将源文件移动到 Input/Failed 目录；若跨设备或权限问题，回退为 copy+unlink
+async function moveFileToFailed(filePath) {
+  const fsPromises = await import('fs/promises');
+  // 已在顶层 Failed 中则不再移动，避免嵌套 Failed/Failed
+  const relToFailed = path.relative(FAILED_DIR, filePath);
+  if (!relToFailed.startsWith('..')) {
+    return filePath;
+  }
+  // 相对 Input 保留子目录结构；若不在 Input 下则仅使用文件名
+  let rel = path.relative(INPUT_DIR, filePath);
+  if (rel.startsWith('..')) {
+    rel = path.basename(filePath);
+  }
+  // 去掉任何以 Failed/ 开头的前缀，避免在顶层 Failed 下再创建 Failed
+  const parts = rel.split(path.sep);
+  if (parts[0]?.toLowerCase() === 'failed') {
+    rel = parts.slice(1).join(path.sep) || path.basename(filePath);
+  }
+  const target = path.join(FAILED_DIR, rel);
+  const targetDir = path.dirname(target);
+  await fsPromises.mkdir(targetDir, { recursive: true });
+  try {
+    await fsPromises.rename(filePath, target);
+  } catch (err) {
+    // 某些文件系统上 rename 跨分区会失败，使用 copy+unlink 回退
+    await fsPromises.copyFile(filePath, target);
+    await fsPromises.unlink(filePath);
+  }
+}
+
+app.post('/api/debug/seed', (req, res) => {
+  seedQueueFromInput();
+  updateBatchCounters();
+  res.json({ success: true, data: { total: state.totals.total, queued: state.files.length, pending: state.batch.pending } });
+});
+
+const soraClient = new SoraApiClient({
+  baseURL: process.env.SORA_API_BASE_URL,
+  apiKey: process.env.SORA_API_KEY,
+  timeout: Number(process.env.API_TIMEOUT) || 300000,
+  retryCount: Number(process.env.API_RETRY_COUNT) || 3,
+  retryDelay: Number(process.env.API_RETRY_DELAY) || 5000,
+});
