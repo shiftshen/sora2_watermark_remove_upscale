@@ -2,7 +2,7 @@
   "2": {
     "inputs": {
       "video": "/data/comfyui/input/AnimateDiff_00043-audio.mp4",
-      "load_audio": false,
+      "load_audio": true,
       "force_rate": 0,
       "custom_width": 0,
       "custom_height": 0,
@@ -75,7 +75,8 @@
       "save_metadata": true,
       "pingpong": false,
       "save_output": true,
-      "images": ["7", 0]
+      "images": ["7", 0],
+      "audio": ["2", 2]
     },
     "class_type": "VHS_VideoCombine",
     "_meta": { "title": "合并为高清输出视频：" }

@@ -79,6 +79,7 @@ async function submitWorkflowFor(filePath) {
   if (wf['2'] && wf['2'].inputs) {
     const containerPath = String(filePath).replace(/^\/data\/comfyui(\/|$)/, '/app/ComfyUI$1')
     wf['2'].inputs.video = containerPath
+    wf['2'].inputs.load_audio = true
     try { delete wf['2'].inputs.upload_to_directory } catch {}
     try { delete wf['2'].inputs.subfolder } catch {}
   }
@@ -98,7 +99,7 @@ async function submitWorkflowFor(filePath) {
     wf['12'].inputs.pix_fmt = 'yuv420p'
     wf['12'].inputs.save_output = true
     wf['12'].inputs.filename_prefix = `up_${path.parse(base).name}`
-    try { delete wf['12'].inputs.audio } catch {}
+    wf['12'].inputs.audio = ['2', 2]
   }
   const prompt = { prompt: wf }
   try {

@@ -1,15 +1,10 @@
 nohup: ignoring input
 plan total= 4 files= sora.thirdme.com_original_2025-11-14T20-05-36-722Z.mp4,sora.thirdme.com_original_2025-11-14T20-05-38-279Z.mp4,sora.thirdme.com_original_2025-11-14T20-05-41-963Z.mp4,sora.thirdme.com_original_2025-11-14T20-05-43-429Z.mp4
-submitted sora.thirdme.com_original_2025-11-14T20-05-36-722Z.mp4 pid d209ca4d-dac5-4314-94ab-c800f99fe6c0 status 200
-queued sora.thirdme.com_original_2025-11-14T20-05-36-722Z.mp4 pid d209ca4d-dac5-4314-94ab-c800f99fe6c0
-submitted sora.thirdme.com_original_2025-11-14T20-05-38-279Z.mp4 pid 39794bc3-1f4b-4817-aefe-5eb72f594651 status 200
-queued sora.thirdme.com_original_2025-11-14T20-05-38-279Z.mp4 pid 39794bc3-1f4b-4817-aefe-5eb72f594651
-submitted sora.thirdme.com_original_2025-11-14T20-05-41-963Z.mp4 pid 95cc6b60-a7b6-4cb1-a4f1-d41c17709bc8 status 200
-queued sora.thirdme.com_original_2025-11-14T20-05-41-963Z.mp4 pid 95cc6b60-a7b6-4cb1-a4f1-d41c17709bc8
-submitted sora.thirdme.com_original_2025-11-14T20-05-43-429Z.mp4 pid db8b3ed1-0a31-491a-a666-8b6f6dbcde9b status 200
-queued sora.thirdme.com_original_2025-11-14T20-05-43-429Z.mp4 pid db8b3ed1-0a31-491a-a666-8b6f6dbcde9b
-timeout waiting output, copied to faild: faild/sora.thirdme.com_original_2025-11-14T20-05-41-963Z.mp4
-timeout waiting output, copied to faild: faild/sora.thirdme.com_original_2025-11-14T20-05-43-429Z.mp4
-timeout waiting output, copied to faild: faild/sora.thirdme.com_original_2025-11-14T20-05-38-279Z.mp4
-timeout waiting output, copied to faild: faild/sora.thirdme.com_original_2025-11-14T20-05-36-722Z.mp4
-summary total= 4 ok= 0 fail= 4
+submitted sora.thirdme.com_original_2025-11-14T20-05-36-722Z.mp4 pid 37846adb-e189-4c87-b9cf-b29925a2f728 status 200
+queued sora.thirdme.com_original_2025-11-14T20-05-36-722Z.mp4 pid 37846adb-e189-4c87-b9cf-b29925a2f728
+submitted sora.thirdme.com_original_2025-11-14T20-05-38-279Z.mp4 pid 4627f8e7-d0ea-4987-b9e1-3b8edf55fcc9 status 200
+queued sora.thirdme.com_original_2025-11-14T20-05-38-279Z.mp4 pid 4627f8e7-d0ea-4987-b9e1-3b8edf55fcc9
+submitted sora.thirdme.com_original_2025-11-14T20-05-41-963Z.mp4 pid 781526e3-c219-4e11-ae51-f0f657afb368 status 200
+queued sora.thirdme.com_original_2025-11-14T20-05-41-963Z.mp4 pid 781526e3-c219-4e11-ae51-f0f657afb368
+submitted sora.thirdme.com_original_2025-11-14T20-05-43-429Z.mp4 pid 3ad49f0a-793c-46dd-8099-6d49409efb97 status 200
+queued sora.thirdme.com_original_2025-11-14T20-05-43-429Z.mp4 pid 3ad49f0a-793c-46dd-8099-6d49409efb97
