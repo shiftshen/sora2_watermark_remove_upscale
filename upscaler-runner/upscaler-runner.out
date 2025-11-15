@@ -8,3 +8,8 @@ submitted sora.thirdme.com_original_2025-11-14T20-05-41-963Z.mp4 pid 781526e3-c2
 queued sora.thirdme.com_original_2025-11-14T20-05-41-963Z.mp4 pid 781526e3-c219-4e11-ae51-f0f657afb368
 submitted sora.thirdme.com_original_2025-11-14T20-05-43-429Z.mp4 pid 3ad49f0a-793c-46dd-8099-6d49409efb97 status 200
 queued sora.thirdme.com_original_2025-11-14T20-05-43-429Z.mp4 pid 3ad49f0a-793c-46dd-8099-6d49409efb97
+timeout waiting output, copied to faild: faild/sora.thirdme.com_original_2025-11-14T20-05-41-963Z.mp4
+timeout waiting output, copied to faild: faild/sora.thirdme.com_original_2025-11-14T20-05-38-279Z.mp4
+timeout waiting output, copied to faild: faild/sora.thirdme.com_original_2025-11-14T20-05-43-429Z.mp4
+timeout waiting output, copied to faild: faild/sora.thirdme.com_original_2025-11-14T20-05-36-722Z.mp4
+summary total= 4 ok= 0 fail= 4
